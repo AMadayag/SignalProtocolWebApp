@@ -1,0 +1,90 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        String   @id @default(uuid())
+  username  String   @unique
+  password  String
+  createdAt DateTime @default(now())
+
+  devices Device[]
+}
+
+model Device {
+  id             String   @id @default(uuid())
+  deviceId       Int
+  registrationId Int
+  identityKey    String
+  authToken      String   @unique
+  createdAt      DateTime @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  signedPreKey   SignedPreKey?
+  kyberPreKeys   KyberPreKey[]
+  oneTimePreKeys OneTimePreKey[]
+
+  sentMessages     Message[] @relation("SentMessages")
+  receivedMessages Message[] @relation("ReceivedMessages")
+
+  @@unique([userId, deviceId])
+}
+
+model SignedPreKey {
+  id        String   @id @default(uuid())
+  keyId     Int
+  publicKey String
+  signature String
+  createdAt DateTime @default(now())
+
+  deviceId String @unique
+  device   Device @relation(fields: [deviceId], references: [id])
+}
+
+model KyberPreKey {
+  id        String   @id @default(uuid())
+  keyId     Int
+  publicKey String
+  signature String
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  deviceId String
+  device   Device @relation(fields: [deviceId], references: [id])
+
+  @@unique([deviceId, keyId])
+}
+
+model OneTimePreKey {
+  id        String   @id @default(uuid())
+  keyId     Int
+  publicKey String
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  deviceId String
+  device   Device @relation(fields: [deviceId], references: [id])
+
+  @@unique([deviceId, keyId])
+}
+
+model Message {
+  id             String   @id @default(uuid())
+  ciphertextType Int
+  ciphertext     String
+  createdAt      DateTime @default(now())
+  delivered      Boolean  @default(false)
+
+  fromDeviceId String
+  fromDevice   Device @relation("SentMessages", fields: [fromDeviceId], references: [id])
+
+  toDeviceId String
+  toDevice   Device @relation("ReceivedMessages", fields: [toDeviceId], references: [id])
+}
