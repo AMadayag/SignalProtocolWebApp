@@ -1,4 +1,7 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { connectInbox } from "../signal/Inbox.js";
+import { saveLoginState } from "../auth/Session.js";
 import { SignalSession } from "../signal/signalClient.js";
 
 function Register() {
@@ -7,6 +10,7 @@ function Register() {
     password: ''
   });
   const [status, setStatus] = useState('');
+  const navigate = useNavigate();
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -29,20 +33,26 @@ function Register() {
       setStatus(`Signup failed: ${await signupRes.text()}`);
       return;
     }
+    const { token: jwtToken } = await signupRes.json();
 
     // Step 2: generate this device's Signal keys IN THE BROWSER and register
     // them. Private keys never leave this tab — only public keys are sent
-    // in the registerDevice() call inside initOrRestore().
+    // in the registerDevice() call inside initOrRestore(). jwtToken proves
+    // to the server which account this device belongs to.
     setStatus('Generating encryption keys...');
     const session = new SignalSession(username, deviceId);
-    await session.initOrRestore();
+    await session.initOrRestore(jwtToken);
 
-    // Stash the session on window for this demo so other components/pages
-    // can reuse it without regenerating. In a real app, put this in your
-    // auth/context state instead.
+    window.__jwtToken = jwtToken;
     window.__signalSession = session;
+    connectInbox(session);
+
+    // Persist so a page reload doesn't lose the login — App.jsx reads this
+    // on startup and restores the session from IndexedDB automatically.
+    saveLoginState({ jwtToken, username, deviceId });
 
     setStatus('Registered! Keys generated locally and never left your browser.');
+    navigate('/');
   };
 
   return (

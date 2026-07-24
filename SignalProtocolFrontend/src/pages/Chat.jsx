@@ -1,49 +1,49 @@
-import { useEffect, useRef, useState } from "react";
-import { connectMessageSocket } from "../signal/serverApi.js";
+import { useEffect, useState } from "react";
+import { subscribe, sendMessageTo, getHistory } from "../signal/inbox.js";
 
 /**
- * Minimal chat UI. Assumes `window.__signalSession` was set by Register.jsx
- * (or your real login flow) — a SignalSession that's already called
- * initOrRestore(). In a real app, pass this via context instead of window.
+ * Assumes connectInbox(session) was already called (see App.jsx, right
+ * after login/restore) — this component just reads/writes through it.
+ * Doesn't own a WebSocket itself; see signal/inbox.js for why.
  */
 function Chat({ peerName, peerDeviceId = 1 }) {
-  const [messages, setMessages] = useState([]); // { from, text }
+  const [messages, setMessages] = useState([]); // { from, text, sentAt }
   const [draft, setDraft] = useState('');
-  const socketRef = useRef(null);
 
   useEffect(() => {
-    const session = window.__signalSession;
-    if (!session) return;
+    let active = true;
 
-    const socket = connectMessageSocket(
-      session.username,
-      session.deviceId,
-      session.authToken,
-      async (envelope) => {
-        // Decrypt happens here, in the browser, right as the envelope arrives.
-        const text = await session.decryptEnvelope(envelope);
-        setMessages((prev) => [...prev, { from: envelope.from, text }]);
-      }
-    );
-    socketRef.current = socket;
+    const refresh = () => {
+      getHistory(peerName, peerDeviceId).then((history) => {
+        if (active) setMessages(history);
+      });
+    };
 
-    return () => socket.close();
-  }, []);
+    refresh();
+
+    // Deliberately re-fetch the full history on every notification instead
+    // of trusting/appending the individual pushed message. This was found
+    // to occasionally miss a live push (message still saved correctly —
+    // just not shown until the chat was reopened); re-reading from the
+    // same persisted source of truth "reopen" already uses makes a missed
+    // push self-correct the moment any subsequent event fires, rather than
+    // depending on every single push landing perfectly.
+    const unsubscribe = subscribe(peerName, peerDeviceId, refresh);
+
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [peerName, peerDeviceId]);
 
   const handleSend = async () => {
-    const session = window.__signalSession;
-    if (!session || !draft.trim()) return;
-
-    // Encrypt happens here, in the browser, before anything is sent.
-    const { ciphertextType, ciphertextBase64 } = await session.encryptFor(
-      peerName,
-      peerDeviceId,
-      draft
-    );
-
-    socketRef.current.send(peerName, peerDeviceId, ciphertextType, ciphertextBase64);
-    setMessages((prev) => [...prev, { from: session.username, text: draft }]);
+    if (!draft.trim()) return;
+    const text = draft;
     setDraft('');
+    await sendMessageTo(peerName, peerDeviceId, text);
+    // No manual setMessages call needed here — sendMessageTo() notifies
+    // the same subscription this component is already listening on, which
+    // now triggers a refresh() rather than an optimistic append.
   };
 
   return (
@@ -54,7 +54,11 @@ function Chat({ peerName, peerDeviceId = 1 }) {
           <li key={i}><strong>{m.from}:</strong> {m.text}</li>
         ))}
       </ul>
-      <input value={draft} onChange={(e) => setDraft(e.target.value)} />
+      <input
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+      />
       <button onClick={handleSend}>Send</button>
     </div>
   );

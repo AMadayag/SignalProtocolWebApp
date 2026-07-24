@@ -19,6 +19,8 @@ export async function completeRegister(username, password) {
 };
 
 
+
+
 export async function fetchPreKeyBundle(name, deviceId) {
   const res = await fetch(`${API_URL}/users/${name}/${deviceId}/bundle`);
   if (!res.ok) {

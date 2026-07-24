@@ -1,61 +1,102 @@
-import { Router } from "express";
+import { Router } from 'express';
+import { prisma } from '../db/prisma.js';
+import { requireDeviceAuth, requireSelf } from '../middleware/auth.js';
 
-const router = Router();
+export const messagesRouter = Router();
 
-// Send encrypted message
-router.post("/", async (req, res) => {
+/**
+ * GET /messages/:username/:deviceId/with/:peerUsername/:peerDeviceId
+ *
+ * Auth required (self only). Returns the ciphertext history between this
+ * device and a specific peer device, oldest first. This is separate from
+ * the WebSocket, which only handles live delivery and offline queueing —
+ * this route is what a client calls to load prior conversation history
+ * (e.g. on opening a chat, or after clearing local storage).
+ *
+ * Note: this returns ciphertext only. Decryption happens client-side, same
+ * as live messages — the server has no way to decrypt these even if it
+ * wanted to.
+ */
+messagesRouter.get(
+  '/messages/:username/:deviceId/with/:peerUsername/:peerDeviceId',
+  requireDeviceAuth,
+  requireSelf('username', 'deviceId'),
+  async (req, res) => {
+    const device = req.device!;
+    const { peerUsername, peerDeviceId } = req.params;
+    if (typeof peerUsername !== 'string' || typeof peerDeviceId !== 'string') {
+      res.status(400).json({ error: 'Invalid route parameters' });
+      return;
+    }
 
-    const {
-        recipient,
-        ciphertext,
-        type
-    } = req.body;
+    const peerUser = await prisma.user.findUnique({ where: { username: peerUsername } });
+    const peerDevice = peerUser
+      ? await prisma.device.findFirst({
+          where: { userId: peerUser.id, deviceId: Number(peerDeviceId) },
+        })
+      : null;
 
-    // Store message
-    // Deliver over websocket if online
+    if (!peerDevice) {
+      res.status(404).json({ error: 'Peer device not found' });
+      return;
+    }
 
-    res.json({
-        success: true
+    const messages = await prisma.message.findMany({
+      where: {
+        OR: [
+          { fromDeviceId: device.id, toDeviceId: peerDevice.id },
+          { fromDeviceId: peerDevice.id, toDeviceId: device.id },
+        ],
+      },
+      orderBy: { createdAt: 'asc' },
     });
-});
 
-// Retrieve queued messages
-router.get("/pending", async (req, res) => {
-    // try {
-    //     const db = getDatabase();
+    res.json(
+      messages.map((m) => ({
+        fromSelf: m.fromDeviceId === device.id,
+        ciphertextType: m.ciphertextType,
+        ciphertext: m.ciphertext,
+        sentAt: m.createdAt.getTime(),
+      }))
+    );
+  }
+);
 
-    //     // Temporary: replace with auth later
-    //     const deviceId = Number(req.query.deviceId);
+/**
+ * GET /messages/:username/:deviceId/conversations
+ *
+ * Auth required (self only). Lists which peer devices this device has
+ * exchanged messages with, so a client can build a conversation list
+ * without fetching full history for every possible peer.
+ */
+messagesRouter.get(
+  '/messages/:username/:deviceId/conversations',
+  requireDeviceAuth,
+  requireSelf('username', 'deviceId'),
+  async (req, res) => {
+    const device = req.device!;
 
-    //     if (!deviceId) {
-    //         return res.status(400).json({
-    //             error: "deviceId required"
-    //         });
-    //     }
+    const messages = await prisma.message.findMany({
+      where: {
+        OR: [{ fromDeviceId: device.id }, { toDeviceId: device.id }],
+      },
+      orderBy: { createdAt: 'desc' },
+    });
 
-    //     const messages = db.prepare(`
-    //         SELECT *
-    //         FROM messages
-    //         WHERE recipient_device = ?
-    //         AND delivered = 0
-    //     `).all(deviceId);
+    const peerDeviceIds = new Set<string>();
+    for (const m of messages) {
+      peerDeviceIds.add(m.fromDeviceId === device.id ? m.toDeviceId : m.fromDeviceId);
+    }
 
-    //     db.prepare(`
-    //         UPDATE messages
-    //         SET delivered = 1
-    //         WHERE recipient_device = ?
-    //         AND delivered = 0
-    //     `).run(deviceId);
+    const peers: Array<{ username: string; deviceId: number }> = [];
+    for (const peerDbId of peerDeviceIds) {
+      const peerDevice = await prisma.device.findUnique({ where: { id: peerDbId } });
+      if (!peerDevice) continue;
+      const peerUser = await prisma.user.findUnique({ where: { id: peerDevice.userId } });
+      if (!peerUser) continue;
+      peers.push({ username: peerUser.username, deviceId: peerDevice.deviceId });
+    }
 
-    //     res.json(messages);
-
-    // } catch (error) {
-    //     console.error(error);
-
-    //     res.status(500).json({
-    //         error: "Server error"
-    //     });
-    // }
-});
-
-export default router;
+    res.json(peers);
+  }
+);

@@ -1,50 +1,69 @@
-import { Router } from "express";
-import { hashPassword } from "../services/authServices";
-import { prisma } from "../db/prisma";
+import { Router } from 'express';
+import { hashPassword, verifyPassword, generateToken } from '../services/authServices.js';
+import { prisma } from '../db/prisma.js';
+import { requireAuth } from '../middleware/requireAuth.js';
 
-const authRouter = Router();
+export const authRouter = Router();
 
-authRouter.post("/signup", async (req, res) => {
-    const { username, password } = req.body;
+authRouter.post('/signup', async (req, res) => {
+  const { username, password } = req.body ?? {};
 
-    // TODO:
-    // validate input
+  if (typeof username !== 'string' || typeof password !== 'string' || !username || !password) {
+    res.status(400).json({ error: 'username and password are required' });
+    return;
+  }
+  if (password.length < 8) {
+    res.status(400).json({ error: 'Password must be at least 8 characters' });
+    return;
+  }
 
-    const hashed = await hashPassword(password);
+  const existing = await prisma.user.findUnique({ where: { username } });
+  if (existing) {
+    res.status(409).json({ error: 'Username already taken' });
+    return;
+  }
 
-    // insert user
-    try {
-        const user = await prisma.user.create({
-            data: {
-              username,
-              password: hashed
-            }
-          });
+  const hashed = await hashPassword(password);
 
-    } catch (e) {
-        console.error(e)
+  let user;
+  try {
+    user = await prisma.user.create({ data: { username, password: hashed } });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Failed to create user' });
+    return;
+  }
 
-        res.status(500).json({
-            message: "Failed to create user"
-        });
-        return;
-    }
-
-    res.status(201).json({
-        message: "User created"
-    });
+  const token = generateToken({ userId: user.id, username: user.username });
+  res.status(201).json({ token });
 });
 
-authRouter.post("/login", async (req, res) => {
-    const { username, password } = req.body;
+authRouter.post('/login', async (req, res) => {
+  const { username, password } = req.body ?? {};
 
-    // TODO:
-    // verify password
-    // create JWT
+  if (typeof username !== 'string' || typeof password !== 'string') {
+    res.status(400).json({ error: 'username and password are required' });
+    return;
+  }
 
-    res.json({
-        token: "jwt-token"
-    });
+  const user = await prisma.user.findUnique({ where: { username } });
+  if (!user) {
+    // Same error as a wrong password, so we don't leak which usernames exist.
+    res.status(401).json({ error: 'Invalid username or password' });
+    return;
+  }
+
+  const valid = await verifyPassword(password, user.password);
+  if (!valid) {
+    res.status(401).json({ error: 'Invalid username or password' });
+    return;
+  }
+
+  const token = generateToken({ userId: user.id, username: user.username });
+  res.json({ token });
 });
 
-export default authRouter
+/** Lets the frontend confirm a stored token is still valid on app load. */
+authRouter.get('/me', requireAuth, (req, res) => {
+  res.json({ userId: req.user!.userId, username: req.user!.username });
+});
