@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { SignalSession } from "../signal/signalClient.js";
 import { connectInbox } from "../signal/Inbox.js";
 import { saveLoginState } from "../auth/Session.js";
-import { SignalSession } from "../signal/signalClient.js";
+import { signup } from "../signal/ServerApi.js";
 
 function Register() {
   const [formData, setFormData] = useState({
@@ -24,21 +25,19 @@ function Register() {
     setStatus('Creating account...');
 
     // Step 1: create the account (username/password) via your existing auth route.
-    const signupRes = await fetch('http://localhost:3000/auth/signup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
-    });
-    if (!signupRes.ok) {
-      setStatus(`Signup failed: ${await signupRes.text()}`);
+    let jwtToken;
+    try {
+      const result = await signup(username, password);
+      jwtToken = result.token;
+    } catch (err) {
+      setStatus(err.message);
       return;
     }
-    const { token: jwtToken } = await signupRes.json();
 
-    // Step 2: generate this device's Signal keys IN THE BROWSER and register
-    // them. Private keys never leave this tab — only public keys are sent
-    // in the registerDevice() call inside initOrRestore(). jwtToken proves
-    // to the server which account this device belongs to.
+    // Step 2: generate this device's Signal keys — real libsignal, running
+    // in Electron's main process (see signal-electron), not in the browser.
+    // Private keys never leave this device; only public keys are sent in
+    // the registerDevice() call inside initOrRestore().
     setStatus('Generating encryption keys...');
     const session = new SignalSession(username, deviceId);
     await session.initOrRestore(jwtToken);

@@ -3,15 +3,16 @@ import { useNavigate } from "react-router-dom";
 import { SignalSession } from "../signal/signalClient.js";
 import { connectInbox } from "../signal/Inbox.js";
 import { saveLoginState } from "../auth/Session.js";
+import { login } from "../signal/ServerApi.js";
 
 /**
- * NOTE: this assumes the SAME BROWSER that originally registered this
- * account/device — the private keys live in this browser's IndexedDB, and
- * there's no way to log in from a different browser/machine without them
- * (consistent with "single device only" noted elsewhere in this project).
- * Logging in from a browser that's never registered this account will hit
- * the registration path instead of restore, and fail with a 409 since
- * deviceId 1 is already taken on the server.
+ * NOTE: this assumes the SAME MACHINE that originally registered this
+ * account/device — private keys live in Electron's local main-process
+ * storage on that machine, and there's no way to log in from a different
+ * machine without them (consistent with "single device only" noted
+ * elsewhere in this project). Logging in from a machine that's never
+ * registered this account will hit the registration path instead of
+ * restore, and fail with a 409 since deviceId 1 is already taken on the server.
  */
 function Login() {
   const [formData, setFormData] = useState({ username: '', password: '' });
@@ -29,16 +30,14 @@ function Login() {
 
     setStatus('Logging in...');
 
-    const loginRes = await fetch('http://localhost:3000/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
-    });
-    if (!loginRes.ok) {
-      setStatus(`Login failed: ${await loginRes.text()}`);
+    let jwtToken;
+    try {
+      const result = await login(username, password);
+      jwtToken = result.token;
+    } catch (err) {
+      setStatus(err.message);
       return;
     }
-    const { token: jwtToken } = await loginRes.json();
 
     setStatus('Restoring your keys...');
     const session = new SignalSession(username, deviceId);
@@ -67,7 +66,6 @@ function Login() {
         ></input>
         <button onClick={handleSubmit}>Submit</button>
       </form>
-      <button onClick={() => navigate('/register')}>Sign Up</button>
       {status && <p>{status}</p>}
     </>
   );
