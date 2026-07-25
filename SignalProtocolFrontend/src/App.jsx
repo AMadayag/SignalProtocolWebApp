@@ -5,8 +5,9 @@ import Login from './pages/Login.jsx';
 import Home from './pages/Home.jsx';
 import Chat from './pages/Chat.jsx';
 import { SignalSession } from './signal/signalClient.js';
-import { connectInbox } from './signal/inbox.js';
+import { connectInbox } from './signal/Inbox.js';
 import { loadLoginState, clearLoginState } from './auth/Session.js';
+import './Styles.css'
 
 function ChatRoute() {
   const { peerUsername, peerDeviceId } = useParams();

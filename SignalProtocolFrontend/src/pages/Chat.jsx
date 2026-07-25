@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { subscribe, sendMessageTo, getHistory } from "../signal/inbox.js";
+import { subscribe, sendMessageTo, getHistory } from "../signal/Inbox.js";
+import { useNavigate } from "react-router-dom";
 
 /**
  * Assumes connectInbox(session) was already called (see App.jsx, right
@@ -9,6 +10,7 @@ import { subscribe, sendMessageTo, getHistory } from "../signal/inbox.js";
 function Chat({ peerName, peerDeviceId = 1 }) {
   const [messages, setMessages] = useState([]); // { from, text, sentAt }
   const [draft, setDraft] = useState('');
+  const navigate = useNavigate();
 
   useEffect(() => {
     let active = true;
@@ -47,19 +49,31 @@ function Chat({ peerName, peerDeviceId = 1 }) {
   };
 
   return (
-    <div>
-      <div>Chat with {peerName}</div>
-      <ul>
-        {messages.map((m, i) => (
-          <li key={i}><strong>{m.from}:</strong> {m.text}</li>
-        ))}
+    <div className="chat-page">
+      <div className="chat-header">
+        <div>Chat with {peerName}</div>
+        <button onClick={() => navigate('/')}>Home</button>
+      </div>
+      <ul className="message-list">
+        {messages.map((m, i) => {
+          const isSelf = m.from === window.__signalSession?.username;
+          return (
+            <li key={i} className={`message-bubble ${isSelf ? 'self' : 'other'}`}>
+              {!isSelf && <span className="sender">{m.from}</span>}
+              {m.text}
+            </li>
+          );
+        })}
       </ul>
-      <input
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-      />
-      <button onClick={handleSend}>Send</button>
+      <div className="chat-input-row">
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+          placeholder="Type a message..."
+        />
+        <button onClick={handleSend}>Send</button>
+      </div>
     </div>
   );
 }
