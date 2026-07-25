@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../db/prisma.js';
 import { requireDeviceAuth, requireSelf } from '../middleware/auth.js';
+import { verifyCiphertextHash } from '../services/integrity.js';
 
 export const messagesRouter = Router();
 
@@ -51,14 +52,25 @@ messagesRouter.get(
       orderBy: { createdAt: 'asc' },
     });
 
-    res.json(
-      messages.map((m) => ({
+    const results = messages.map((m) => {
+      const intact = verifyCiphertextHash(m.ciphertext, m.ciphertextHash);
+      if (!intact) {
+        console.error(`[integrity] hash mismatch for message ${m.id} — possible tampering or corruption`);
+      }
+      return {
         fromSelf: m.fromDeviceId === device.id,
         ciphertextType: m.ciphertextType,
-        ciphertext: m.ciphertext,
+        // Withhold ciphertext that fails its integrity check rather than
+        // serving it — the client will correctly fail to decrypt it either
+        // way, but this surfaces the failure explicitly instead of letting
+        // it look like an ordinary decrypt error.
+        ciphertext: intact ? m.ciphertext : null,
+        integrityFailure: !intact,
         sentAt: m.createdAt.getTime(),
-      }))
-    );
+      };
+    });
+
+    res.json(results);
   }
 );
 

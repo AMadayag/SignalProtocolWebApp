@@ -2,6 +2,7 @@ import type { Server as HttpServer } from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { prisma } from '../db/prisma.js';
 import { connections } from './connections.js';
+import { hashCiphertext, verifyCiphertextHash } from '../services/integrity.js';
 
 interface ClientSendMessage {
   type: 'send';
@@ -59,6 +60,12 @@ export function initializeSocketServer(server: HttpServer) {
       where: { toDeviceId: device.id, delivered: false },
     });
     for (const envelope of queued) {
+      const intact = verifyCiphertextHash(envelope.ciphertext, envelope.ciphertextHash);
+      if (!intact) {
+        console.error(`[integrity] hash mismatch on queued message ${envelope.id} — skipping flush`);
+        continue;
+      }
+
       const fromDevice = await prisma.device.findUnique({ where: { id: envelope.fromDeviceId } });
       const fromUser = fromDevice
         ? await prisma.user.findUnique({ where: { id: fromDevice.userId } })
@@ -104,6 +111,7 @@ export function initializeSocketServer(server: HttpServer) {
             toDeviceId: recipientDevice.id,
             ciphertextType: msg.ciphertextType,
             ciphertext: msg.ciphertext,
+            ciphertextHash: hashCiphertext(msg.ciphertext),
             delivered: isRecipientOnline,
             createdAt: sentAt,
           },

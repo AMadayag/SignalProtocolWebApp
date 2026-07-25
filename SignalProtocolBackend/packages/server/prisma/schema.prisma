@@ -79,6 +79,13 @@ model Message {
   id             String   @id @default(uuid())
   ciphertextType Int
   ciphertext     String
+  // SHA-256 hex digest of `ciphertext`, computed at write time. Checked on
+  // every read — a mismatch means the stored ciphertext was altered after
+  // being written (storage corruption or tampering), and is flagged rather
+  // than silently served. This is defense-in-depth: the Double Ratchet's
+  // authenticated encryption already makes tampering detectable at
+  // decrypt time client-side, but this catches it earlier and more cheaply.
+  ciphertextHash String
   createdAt      DateTime @default(now())
   delivered      Boolean  @default(false)
 

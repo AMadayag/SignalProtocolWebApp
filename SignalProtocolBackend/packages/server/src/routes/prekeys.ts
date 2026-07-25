@@ -1,8 +1,52 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { prisma } from '../db/prisma.js';
 import { requireDeviceAuth, requireSelf } from '../middleware/auth.js';
+import { sendToDevice } from '../websocket/connections.js';
 
 export const prekeysRouter = Router();
+
+/** Below this many remaining, we proactively tell the device (if connected) to top up. */
+const ONE_TIME_PREKEY_LOW_WATERMARK = 5;
+const KYBER_PREKEY_LOW_WATERMARK = 2;
+
+// Keyed by the TARGET device being fetched, not the requester's IP —
+// prevents an attacker from draining one specific person's prekey supply
+// by hammering their bundle endpoint, without limiting a legitimate user
+// who fetches many different people's bundles (starting several new chats).
+const bundleFetchLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `${req.params.username}:${req.params.deviceId}`,
+  message: { error: 'Too many bundle requests for this device. Try again shortly.' },
+});
+
+/**
+ * Checks remaining prekey counts for a device and, if connected via
+ * WebSocket, pushes a `topupNeeded` notification so the client can generate
+ * and upload more without the user having to do anything. This is the
+ * "automatic top-up" trigger — the actual key generation still has to
+ * happen client-side, since the server never has private keys to make more.
+ */
+async function checkAndNotifyLowPreKeys(deviceDbId: string) {
+  const [oneTimeRemaining, kyberRemaining] = await Promise.all([
+    prisma.oneTimePreKey.findMany({ where: { deviceId: deviceDbId, used: false } }),
+    prisma.kyberPreKey.findMany({ where: { deviceId: deviceDbId, used: false } }),
+  ]);
+
+  const needsOneTime = oneTimeRemaining.length <= ONE_TIME_PREKEY_LOW_WATERMARK;
+  const needsKyber = kyberRemaining.length <= KYBER_PREKEY_LOW_WATERMARK;
+
+  if (needsOneTime || needsKyber) {
+    sendToDevice(deviceDbId, {
+      type: 'topupNeeded',
+      oneTimePreKeysRemaining: oneTimeRemaining.length,
+      kyberPreKeysRemaining: kyberRemaining.length,
+    });
+  }
+}
 
 /**
  * GET /users/:username/:deviceId/bundle
@@ -12,9 +56,13 @@ export const prekeysRouter = Router();
  * Consumes one one-time prekey (marks it used) and one Kyber prekey, since
  * both are meant to be used exactly once per session establishment.
  */
-prekeysRouter.get('/users/:username/:deviceId/bundle', async (req, res) => {
+prekeysRouter.get('/users/:username/:deviceId/bundle', bundleFetchLimiter, async (req, res) => {
   const { username } = req.params;
   const deviceId = Number(req.params.deviceId);
+  if (typeof username !== 'string') {
+    res.status(400).json({ error: 'Invalid route parameters' });
+    return;
+  }
 
   const user = await prisma.user.findUnique({ where: { username } });
   if (!user) {
@@ -54,6 +102,12 @@ prekeysRouter.get('/users/:username/:deviceId/bundle', async (req, res) => {
     where: { id: kyberPreKey.id },
     data: { used: true },
   });
+
+  // Fire-and-forget: don't block the response on this, and don't fail the
+  // request if the device happens to not be connected right now.
+  checkAndNotifyLowPreKeys(device.id).catch((err) =>
+    console.error('Failed to check/notify low prekeys:', err)
+  );
 
   res.json({
     registrationId: device.registrationId,

@@ -1,11 +1,32 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { hashPassword, verifyPassword, generateToken } from '../services/authServices.js';
 import { prisma } from '../db/prisma.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 
 export const authRouter = Router();
 
-authRouter.post('/signup', async (req, res) => {
+// 5 attempts per 15 minutes per IP — stops brute-force password guessing
+// without affecting a real user who mistypes their password a couple of times.
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many login attempts. Try again later.' },
+});
+
+// 10 signups per hour per IP — stops mass fake-account creation without
+// affecting anyone signing up for their own single account.
+const signupLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many accounts created from this network. Try again later.' },
+});
+
+authRouter.post('/signup', signupLimiter, async (req, res) => {
   const { username, password } = req.body ?? {};
 
   if (typeof username !== 'string' || typeof password !== 'string' || !username || !password) {
@@ -38,7 +59,7 @@ authRouter.post('/signup', async (req, res) => {
   res.status(201).json({ token });
 });
 
-authRouter.post('/login', async (req, res) => {
+authRouter.post('/login', loginLimiter, async (req, res) => {
   const { username, password } = req.body ?? {};
 
   if (typeof username !== 'string' || typeof password !== 'string') {
